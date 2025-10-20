@@ -1,0 +1,75 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vpa-sync
+  namespace: default
+spec:
+  schedule: "*/15 * * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: vpa-sync
+        spec:
+          serviceAccountName: vpa-sync
+          restartPolicy: OnFailure
+          containers:
+          - name: sync
+            image: alpine/k8s:1.28.0
+            command: ["/bin/sh"]
+            args:
+            - -c
+            - |
+              cp /scripts/sync-vpa.sh /tmp/sync-vpa.sh
+              chmod +x /tmp/sync-vpa.sh
+              /tmp/sync-vpa.sh
+            env:
+            - name: VPA_NAME
+              value: "test-app-vpa"
+            - name: DEPLOYMENT_NAME
+              value: "test-app"
+            - name: DEPLOYMENT_FILE
+              value: "vpa-gitops-test/k8s/base/deployment.yaml"
+            - name: CONTAINER_NAME
+              value: "nginx"
+            - name: NAMESPACE
+              value: "default"
+            - name: GIT_BRANCH
+              value: "main"
+            - name: GIT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: git-credentials
+                  key: GIT_USERNAME
+            - name: GIT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: git-credentials
+                  key: GIT_TOKEN
+            - name: GIT_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: git-credentials
+                  key: GIT_EMAIL
+            - name: GIT_REPO
+              valueFrom:
+                secretKeyRef:
+                  name: git-credentials
+                  key: GIT_REPO
+            volumeMounts:
+            - name: script
+              mountPath: /scripts
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 200m
+                memory: 256Mi
+          volumes:
+          - name: script
+            configMap:
+              name: vpa-sync-script

@@ -1,0 +1,138 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vpa-sync-script
+  namespace: default
+data:
+  sync-vpa.sh: |
+    #!/bin/bash
+    set -e
+    
+    echo "🚀 VPA to Git Sync Started at $(date)"
+    
+    # Configuration
+    VPA_NAME="${VPA_NAME:-test-app-vpa}"
+    DEPLOYMENT_NAME="${DEPLOYMENT_NAME:-test-app}"
+    DEPLOYMENT_FILE="${DEPLOYMENT_FILE:-vpa-gitops-test/k8s/base/deployment.yaml}"
+    CONTAINER_NAME="${CONTAINER_NAME:-nginx}"
+    NAMESPACE="${NAMESPACE:-default}"
+    
+    # Git configuration
+    GIT_REPO="${GIT_REPO}"
+    GIT_USERNAME="${GIT_USERNAME}"
+    GIT_TOKEN="${GIT_TOKEN}"
+    GIT_EMAIL="${GIT_EMAIL}"
+    GIT_BRANCH="${GIT_BRANCH:-main}"
+    
+    echo "📋 Configuration:"
+    echo "  VPA: $VPA_NAME"
+    echo "  Deployment: $DEPLOYMENT_NAME"
+    echo "  File: $DEPLOYMENT_FILE"
+    echo "  Git Repo: $GIT_REPO"
+    
+    # Install required tools
+    echo "📦 Installing tools..."
+    apk add --no-cache git yq jq curl
+    
+    # Get VPA recommendations
+    echo "📊 Fetching VPA recommendations..."
+    VPA_JSON=$(kubectl get vpa $VPA_NAME -n $NAMESPACE -o json)
+    
+    if [ $? -ne 0 ]; then
+      echo "❌ Failed to get VPA $VPA_NAME"
+      exit 1
+    fi
+    
+    # Extract recommendations
+    CPU_TARGET=$(echo "$VPA_JSON" | jq -r '.status.recommendation.containerRecommendations[] | select(.containerName=="'$CONTAINER_NAME'") | .target.cpu')
+    MEMORY_TARGET=$(echo "$VPA_JSON" | jq -r '.status.recommendation.containerRecommendations[] | select(.containerName=="'$CONTAINER_NAME'") | .target.memory')
+    
+    echo "✅ VPA Recommendations:"
+    echo "  CPU: $CPU_TARGET"
+    echo "  Memory: $MEMORY_TARGET"
+    
+    if [ "$CPU_TARGET" == "null" ] || [ "$MEMORY_TARGET" == "null" ]; then
+      echo "⚠️  No valid recommendations yet, skipping update"
+      exit 0
+    fi
+    
+    # Get current values from deployment
+    echo "📖 Reading current deployment..."
+    CURRENT_CPU=$(kubectl get deployment $DEPLOYMENT_NAME -n $NAMESPACE -o jsonpath='{.spec.template.spec.containers[?(@.name=="'$CONTAINER_NAME'")].resources.requests.cpu}')
+    CURRENT_MEMORY=$(kubectl get deployment $DEPLOYMENT_NAME -n $NAMESPACE -o jsonpath='{.spec.template.spec.containers[?(@.name=="'$CONTAINER_NAME'")].resources.requests.memory}')
+    
+    echo "📊 Current Values:"
+    echo "  CPU: $CURRENT_CPU"
+    echo "  Memory: $CURRENT_MEMORY"
+    
+    # Check if update is needed (allow 10% threshold)
+    # Convert to comparable values (millicores)
+    CPU_TARGET_MILLI=$(echo "$CPU_TARGET" | sed 's/m$//')
+    CURRENT_CPU_MILLI=$(echo "$CURRENT_CPU" | sed 's/m$//')
+    
+    # Simple comparison (can be enhanced with percentage threshold)
+    if [ "$CPU_TARGET" == "$CURRENT_CPU" ] && [ "$MEMORY_TARGET" == "$CURRENT_MEMORY" ]; then
+      echo "✅ No update needed, values already match VPA recommendations"
+      exit 0
+    fi
+    
+    echo "🔄 Update needed, proceeding with Git sync..."
+    
+    # Clone repository
+    echo "📥 Cloning repository..."
+    REPO_URL=$(echo $GIT_REPO | sed "s#https://#https://${GIT_USERNAME}:${GIT_TOKEN}@#")
+    git clone --depth 1 --branch $GIT_BRANCH $REPO_URL /workspace
+    cd /workspace
+    
+    # Configure git
+    git config user.name "VPA Sync Bot"
+    git config user.email "$GIT_EMAIL"
+    
+    # Update deployment YAML
+    echo "✏️  Updating $DEPLOYMENT_FILE..."
+    
+    # Using yq to update YAML
+    yq eval -i "
+      (.spec.template.spec.containers[] | select(.name == \"$CONTAINER_NAME\") | .resources.requests.cpu) = \"$CPU_TARGET\" |
+      (.spec.template.spec.containers[] | select(.name == \"$CONTAINER_NAME\") | .resources.requests.memory) = \"$MEMORY_TARGET\" |
+      (.metadata.annotations.\"vpa-sync/last-update\") = \"$(date -Iseconds)\" |
+      (.metadata.annotations.\"vpa-sync/last-recommendation\") = \"CPU: $CPU_TARGET, Memory: $MEMORY_TARGET\"
+    " $DEPLOYMENT_FILE
+    
+    # Check if there are changes
+    if git diff --quiet; then
+      echo "✅ No changes in YAML (already up to date)"
+      exit 0
+    fi
+    
+    echo "📝 Changes detected:"
+    git diff $DEPLOYMENT_FILE
+    
+    # Commit and push
+    echo "💾 Committing changes..."
+    git add $DEPLOYMENT_FILE
+    git commit -m "Auto-update: VPA recommendations
+
+    VPA: $VPA_NAME
+    Deployment: $DEPLOYMENT_NAME
+    Container: $CONTAINER_NAME
+    
+    Changes:
+    - CPU: $CURRENT_CPU → $CPU_TARGET
+    - Memory: $CURRENT_MEMORY → $MEMORY_TARGET
+    
+    Updated by: VPA Sync Bot
+    Timestamp: $(date -Iseconds)"
+    
+    echo "📤 Pushing to Git..."
+    git push origin $GIT_BRANCH
+    
+    if [ $? -eq 0 ]; then
+      echo "✅ Successfully pushed to Git!"
+      echo "🎉 ArgoCD will sync automatically"
+    else
+      echo "❌ Failed to push to Git"
+      exit 1
+    fi
+    
+    echo "✅ VPA to Git Sync Completed at $(date)"
