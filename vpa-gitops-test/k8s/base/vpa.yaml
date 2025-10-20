@@ -1,0 +1,23 @@
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: test-app-vpa
+  namespace: default
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: test-app
+  updatePolicy:
+    updateMode: "Off" 
+  resourcePolicy:
+    containerPolicies:
+    - containerName: nginx
+      controlledResources: ["cpu", "memory"]
+      minAllowed:
+        cpu: 50m
+        memory: 128Mi
+      maxAllowed:
+        cpu: 2000m
+        memory: 2Gi
+      mode: "Auto"
