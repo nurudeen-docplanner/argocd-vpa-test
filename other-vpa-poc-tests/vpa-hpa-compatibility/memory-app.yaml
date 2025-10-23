@@ -1,0 +1,100 @@
+# memory-app-optimized.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: memory-app
+  namespace: default
+spec:
+  replicas: 2  
+  selector:
+    matchLabels:
+      app: memory-app
+  template:
+    metadata:
+      labels:
+        app: memory-app
+    spec:
+      containers:
+      - name: app
+        image: python:3.9-slim
+        resizePolicy:
+        - resourceName: cpu
+          restartPolicy: NotRequired
+        - resourceName: memory
+          restartPolicy: RestartContainer
+        command: ["python3"]
+        args:
+        - -c
+        - |
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import time
+          
+          memory_hog = []
+          
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  global memory_hog
+                  
+                  if self.path == '/':
+                      # Light CPU work
+                      sum([i**2 for i in range(5000)])  
+                      self.send_response(200)
+                      self.end_headers()
+                      self.wfile.write(b'OK')
+                  
+                  elif self.path == '/cpu':
+                      # CPU load - lighter
+                      sum([i**2 for i in range(50000)]) 
+                      self.send_response(200)
+                      self.end_headers()
+                      self.wfile.write(b'CPU work done\n')
+                  
+                  elif self.path == '/allocate':
+                      # Allocate only 50MB
+                      memory_hog.append(' ' * (50 * 1024 * 1024))
+                      self.send_response(200)
+                      self.end_headers()
+                      self.wfile.write(f'Allocated. Total: {len(memory_hog) * 50}MB\n'.encode())
+                  
+                  elif self.path == '/release':
+                      memory_hog.clear()
+                      self.send_response(200)
+                      self.end_headers()
+                      self.wfile.write(b'Released\n')
+                  
+                  elif self.path == '/health':
+                      self.send_response(200)
+                      self.end_headers()
+                      self.wfile.write(b'Healthy\n')
+                  
+                  else:
+                      self.send_response(404)
+                      self.end_headers()
+              
+              def log_message(self, format, *args):
+                  pass
+          
+          print("Server ready on port 8080")
+          HTTPServer(('0.0.0.0', 8080), Handler).serve_forever()
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: 100m       
+            memory: 128Mi   
+          limits:
+            cpu: 400m       
+            memory: 512Mi   
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: memory-app
+  namespace: default
+spec:
+  selector:
+    app: memory-app
+  ports:
+  - port: 80
+    targetPort: 8080
+  type: ClusterIP

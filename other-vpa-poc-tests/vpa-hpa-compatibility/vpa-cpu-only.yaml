@@ -1,0 +1,19 @@
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-cpu-only
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: memory-app
+  updatePolicy:
+    updateMode: "Off"  # Start here
+  resourcePolicy:
+    containerPolicies:
+    - containerName: 'app'
+      controlledResources: ["cpu"]
+      minAllowed:
+        cpu: 20m
+      maxAllowed:
+        cpu: 300m

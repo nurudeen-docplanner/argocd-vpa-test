@@ -1,0 +1,23 @@
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-metrics-app
+  namespace: default
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: metrics-app
+  updatePolicy:
+    updateMode: "Auto"  
+  resourcePolicy:
+    containerPolicies:
+    - containerName: 'app'
+      controlledResources: ["cpu", "memory"]  # VPA manages both
+      minAllowed:
+        cpu: 50m
+        memory: 128Mi
+      maxAllowed:
+        cpu: 400m
+        memory: 400Mi
+      mode: "Auto"

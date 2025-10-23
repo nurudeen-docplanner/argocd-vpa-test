@@ -1,0 +1,21 @@
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-memory-only
+  namespace: default
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: memory-app
+  updatePolicy:
+    updateMode: "Off"  # Start with Off to observe
+  resourcePolicy:
+    containerPolicies:
+    - containerName: 'app'
+      controlledResources: ["memory"]  # Only manage MEMORY
+      minAllowed:
+        memory: 100Mi
+      maxAllowed:
+        memory: 400Mi
+      mode: "Auto"

@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-app
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: metrics-app
+  template:
+    metadata:
+      labels:
+        app: metrics-app
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: app
+        image: python:3.9-slim
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          # Create the application file
+          cat > /app.py << 'EOFAPP'
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          from prometheus_client import Counter, Histogram, generate_latest, REGISTRY
+          import time
+          
+          # Prometheus metrics
+          REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests', ['method', 'endpoint'])
+          REQUEST_DURATION = Histogram('http_request_duration_seconds', 'HTTP request duration')
+          
+          memory_hog = []
+          
+          class MetricsHandler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  global memory_hog
+                  
+                  # Record metrics
+                  REQUEST_COUNT.labels(method='GET', endpoint=self.path).inc()
+                  start_time = time.time()
+                  
+                  try:
+                      if self.path == '/':
+                          sum([i**2 for i in range(5000)])
+                          self.send_response(200)
+                          self.end_headers()
+                          self.wfile.write(b'OK\n')
+                      
+                      elif self.path == '/metrics':
+                          metrics = generate_latest(REGISTRY)
+                          self.send_response(200)
+                          self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                          self.end_headers()
+                          self.wfile.write(metrics)
+                      
+                      elif self.path == '/cpu':
+                          result = sum([i**3 for i in range(500000)])
+                          self.send_response(200)
+                          self.end_headers()
+                          self.wfile.write(f'CPU work: {result}\n'.encode())
+                      
+                      elif self.path == '/allocate':
+                          memory_hog.append(' ' * (50 * 1024 * 1024))
+                          self.send_response(200)
+                          self.end_headers()
+                          self.wfile.write(f'Memory: {len(memory_hog) * 50}MB\n'.encode())
+                      
+                      elif self.path == '/release':
+                          memory_hog.clear()
+                          self.send_response(200)
+                          self.end_headers()
+                          self.wfile.write(b'Released\n')
+                      
+                      elif self.path == '/health':
+                          self.send_response(200)
+                          self.end_headers()
+                          self.wfile.write(b'Healthy\n')
+                      
+                      else:
+                          self.send_response(404)
+                          self.end_headers()
+                  
+                  finally:
+                      REQUEST_DURATION.observe(time.time() - start_time)
+              
+              def log_message(self, format, *args):
+                  pass
+          
+          if __name__ == '__main__':
+              print('Server with Prometheus metrics starting on port 8080...')
+              HTTPServer(('0.0.0.0', 8080), MetricsHandler).serve_forever()
+          EOFAPP
+          
+          # Install prometheus_client
+          echo "Installing prometheus_client..."
+          pip install -q --no-cache-dir prometheus_client
+          
+          # Run the application
+          echo "Starting application..."
+          python3 /app.py
+        ports:
+        - containerPort: 8080
+          name: http
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 20
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metrics-app
+  namespace: default
+  labels:
+    app: metrics-app
+spec:
+  selector:
+    app: metrics-app
+  ports:
+  - port: 80
+    targetPort: 8080
+    name: http
+  type: ClusterIP
